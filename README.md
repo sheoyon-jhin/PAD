@@ -10,3 +10,9 @@ conda env create --file PAD.yml
 ```
 conda activate PAD
 ```
+
+
+### activate conda 
+```
+sh swat.sh
+```

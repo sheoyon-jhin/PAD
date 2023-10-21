@@ -4,6 +4,8 @@ Anomaly detection is an important field that aims to identify unexpected pattern
 <p align="center">
   <img align="middle" src="./PAD.png" alt="PAD"/> 
 </p>
+Comparison between the conventional anomaly detection and our proposed the precursor-of-anomaly (PoA) detection. In PoA, we predict whether the next window will contain any abnormal observation before it happens, which is much more challenging than the anomaly detection.
+
 ### create conda environments
 ```
 conda env create --file PAD.yml

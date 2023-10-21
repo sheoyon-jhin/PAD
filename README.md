@@ -21,3 +21,21 @@ conda activate PAD
 ```
 sh swat.sh
 ```
+```
+@inproceedings{10.1145/3580305.3599469,
+author = {Jhin, Sheo Yon and Lee, Jaehoon and Park, Noseong},
+title = {Precursor-of-Anomaly Detection for Irregular Time Series},
+year = {2023},
+isbn = {9798400701030},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3580305.3599469},
+doi = {10.1145/3580305.3599469},
+booktitle = {Proceedings of the 29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining},
+pages = {917–929},
+numpages = {13},
+keywords = {neural controlled differential equations, precursor-of-anomaly detection, time-series anomaly detection, anomaly detection},
+location = {Long Beach, CA, USA},
+series = {KDD '23}
+}
+```

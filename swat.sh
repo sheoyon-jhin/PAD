@@ -4,6 +4,9 @@ if [ ! -d "./exp_logs" ]; then
     mkdir ./exp_logs
 fi
 
+if [ ! -d "./exp_logs/SWAT" ]; then
+    mkdir ./exp_logs/SWAT
+fi
 
 
 

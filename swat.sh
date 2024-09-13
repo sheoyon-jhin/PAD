@@ -1,5 +1,11 @@
 
 
+if [ ! -d "./logs" ]; then
+    mkdir ./logs
+fi
+
+
+
 
 
 for lr in 1e-2

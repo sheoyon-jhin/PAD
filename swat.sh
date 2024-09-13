@@ -1,7 +1,7 @@
 
 
-if [ ! -d "./logs" ]; then
-    mkdir ./logs
+if [ ! -d "./exp_logs" ]; then
+    mkdir ./exp_logs
 fi
 
 

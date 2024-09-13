@@ -9,7 +9,6 @@ def normalize(data):
     denominator = np.max(data, 0) - np.min(data, 0)
     norm_data = numerator / (denominator + 1e-7)
     return norm_data
-#numerator array([ 244.100052,  250.780014,  239.402664,  244.543396,  244.543396,7922.      ])
 
 def to_tensor(data):
     return torch.from_numpy(data).float()

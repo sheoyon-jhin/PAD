@@ -16,7 +16,7 @@ def normalize(data):
 # 2 : output * (2.52069743e+03)+ (1e-7) + 239.402664
 # 3 : output * (2.54834650e+03)+ (1e-7) + 244.543396
 # 4 : output * (2.54834650e+03)+ (1e-7) + 244.543396
-# 5 : output * (2.49701520e+07)+ (1e-7) + 7922
+
 def to_tensor(data):
     return torch.from_numpy(data).float()
 

@@ -11,7 +11,6 @@ def normalize(data):
     return norm_data
 #numerator array([ 244.100052,  250.780014,  239.402664,  244.543396,  244.543396,7922.      ])
 #denominator array([2.55611992e+03, 2.54943996e+03, 2.52069743e+03, 2.54834650e+03,2.54834650e+03, 2.49701520e+07])
-# 0 : output * (2.55611992e+03)+ (1e-7) + 244.100052
 
 def to_tensor(data):
     return torch.from_numpy(data).float()

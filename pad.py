@@ -10,6 +10,7 @@ import torchdiffeq
 from sklearn import metrics 
 import pathlib
 
+from data_factory.data_loader import get_loader_segment
 from sklearn.metrics import precision_recall_fscore_support
 
 import datasets
@@ -20,6 +21,17 @@ warnings.filterwarnings("ignore")
 CUBICS = ['natural_cubic','cubic']
 torch.backends.cudnn.benchmark = True
 
+def delete_get_index(target1,target2,target3,target4,index):
+    # import pdb ; pdb.set_trace()
+    count = 0 
+    for id,ind in enumerate(index):
+        ind = ind-count 
+        target1 = torch.cat([target1[:ind],target1[ind+1:]])
+        target2 = torch.cat([target2[:ind],target2[ind+1:]])
+        target3 = torch.cat([target3[:ind],target3[ind+1:]])
+        target4 = torch.cat([target4[:ind],target4[ind+1:]])
+        count +=1
+    return target1,target2,target3,target4
 
 def get_dataset(args):
     if args.dataset =='MSL':
@@ -355,15 +367,11 @@ class NeuralDE(torch.nn.Module):
             if mode =='train':
                 next_pred_y = next_z_T[:,look_window-self.forecast_window:,:]
                 next_pred_reconstruct = self.forecast(next_pred_y)
-                # import pdb ; pdb.set_trace()
                 next_pred_y = self.readout2(next_pred_y)
-                # import pdb ;pdb.set_trace()
                 next_pred_y_gt = next_pred_y.squeeze(-1)
                 next_pred_y_gt = next_pred_y_gt[:,-1]
             
             ## Forecasting part  
-            
-            
             forecast_hidden =  h_T[:,look_window-self.forecast_window:,:]
             pred_next_forecast = self.forecast(forecast_hidden)
             pred_next_y = self.readout2(forecast_hidden)
@@ -371,18 +379,12 @@ class NeuralDE(torch.nn.Module):
             
             
             pred_next_y = pred_next_y[:,-1]
-            # import pdb ; pdb.set_trace()
             
         if args.model =='node':
             if 'atol' not in kwargs:
                 kwargs['atol'] = 1e-6
             if 'rtol' not in kwargs:
                 kwargs['rtol'] = 1e-4
-            # if adjoint:
-            #     if "adjoint_atol" not in kwargs:
-            #         kwargs["adjoint_atol"] = kwargs["atol"]
-            #     if "adjoint_rtol" not in kwargs:
-            #         kwargs["adjoint_rtol"] = kwargs["rtol"]
             if 'method' not in kwargs:
                 kwargs['method'] = 'rk4'
             if kwargs['method'] == 'rk4':
@@ -448,9 +450,8 @@ def train(args,optimizer,forecast_loss,train_dataloader,val_dataloader,test_data
                 next_X= torchcde.CubicSpline(batch_next_coeffs)
                 next_times = torch.arange(next_X.interval[-1].item()+1)
                 next_forecast = next_X.evaluate(next_times)
-            
+            # import pdb ; pdb.set_trace()
             fore_loss = forecast_loss(forecast_y.cpu(),next_forecast.cpu()) #256,20,55
-            
             present_score  = pred_y # (present.cuda() - reconstruct).abs().mean(dim=[1,2]) + pred_y
             next_gt_score = next_gt # (next_forecast.cuda() - next_gt_reconstruct).abs().mean(dim=[1,2]) + next_gt
             precursor_score = pred_next_y
@@ -459,12 +460,16 @@ def train(args,optimizer,forecast_loss,train_dataloader,val_dataloader,test_data
             next_binary_prediction = (precursor_score>0).to(batch_y.dtype)
             next_gt = (next_gt_score>0).to(batch_y.dtype)
             
+            
+            # binary_prediction = (pred_y<0.02).to(batch_y.dtype)
+            
+            
             batch_y = (batch_y.sum(dim=1)>0).to(batch_y.dtype)
             next_y = (next_y.sum(dim=1)>0).to(batch_y.dtype)
             
             loss = torch.nn.functional.binary_cross_entropy_with_logits(pred_y, batch_y)
             # Knowledge distillation
-            next_loss = torch.nn.functional.binary_cross_entropy_with_logits(pred_next_y, next_gt)
+            next_loss = torch.nn.functional.binary_cross_entropy_with_logits(next_gt, next_binary_prediction)
             
             
             full_pred_y=torch.cat([full_pred_y,binary_prediction])
@@ -476,6 +481,13 @@ def train(args,optimizer,forecast_loss,train_dataloader,val_dataloader,test_data
             pred_latent_y = torch.cat([pred_latent_y,present_score])
             pred_latent_next_y = torch.cat([pred_latent_next_y,precursor_score])
             
+            neg_loss = (pred_y * batch_y ).sum()/ batch_y.sum()
+            neg_next_loss = (pred_next_y * next_y ).sum()/ next_y.sum()
+            
+            pos_y = (batch_y<=0).to(batch_y.dtype)
+            pos_next_y = (next_y<=0).to(batch_y.dtype)
+            pos_loss = (pred_y * pos_y ).sum()/ pos_y.sum()
+            pos_next_loss = (pred_next_y * pos_next_y ).sum()/ pos_next_y.sum()
             
             full_loss = next_loss + loss
             train_loss_ += full_loss
@@ -495,28 +507,22 @@ def train(args,optimizer,forecast_loss,train_dataloader,val_dataloader,test_data
         train_loss = train_loss_ / len(train_dataloader)
         mse_loss = mse_loss_ / len(train_dataloader)
         
-        if (full_true_y.sum() ==0) or (full_true_y.sum() == full_true_y.shape[0]): 
-            auroc = 0.5
-            auroc_next = 0.5
-        else:
-            fpr,tpr,thresholds = metrics.roc_curve(y,preds,pos_label=1)
-            next_fpr,next_tpr,next_thresholds = metrics.roc_curve(next_y,next_preds,pos_label=1)
+        fpr,tpr,thresholds = metrics.roc_curve(y,preds,pos_label=1)
+        next_fpr,next_tpr,next_thresholds = metrics.roc_curve(next_y,next_preds,pos_label=1)
             
-            auroc = metrics.auc(fpr,tpr)
-            auroc_next = metrics.auc(next_fpr,next_tpr)
-
+            
         Full_precision, Full_recall, Full_f_score, _     = precision_recall_fscore_support(full_true_y.cpu(), full_pred_y.cpu(),average='weighted')
         Next_precision, Next_recall, Next_f_score, _     = precision_recall_fscore_support(full_true_next_y.cpu(), full_pred_next_y.cpu(),average='weighted')
         
         
         # print('Epoch: {}   Train loss:      {:.4f}  Train forecasting loss :      {:.4f}    Time :{:.4f}'.format(epoch, train_loss,mse_loss,(time.time()-start_time)))
         
-        print('Epoch: {}   Train loss:      {:.4f}  Train Pr :      {:.4f}       Train Re :      {:.4f}   Train F1:       {:.4f}  Train AUROC :       {:.4f}      Time :{:.4f}'.format(epoch, loss.item(),Full_precision,Full_recall,Full_f_score,auroc,(time.time()-start_time)))
-        print('[Precursor]                          Train Next Pr : {:.4f}       Train Next Re : {:.4f}   Train Next F1:  {:.4f}  Train Next AUROC :  {:.4f}'.format(Next_precision,Next_recall,Next_f_score,auroc_next))
+        print('Epoch: {}   Train loss:      {:.4f}  Train Pr :      {:.4f}       Train Re :      {:.4f}   Train F1:       {:.4f}      Time :{:.4f}'.format(epoch, loss.item(),Full_precision,Full_recall,Full_f_score,(time.time()-start_time)))
+        print('[Precursor]                          Train Next Pr : {:.4f}       Train Next Re : {:.4f}   Train Next F1:  {:.4f} '.format(Next_precision,Next_recall,Next_f_score))
         print('[Forecasting]                        Train MSE :     {:.4f} \n'.format(mse_loss))
         evaluate(args,'val',val_dataloader,epoch)
         evaluate(args,'test',test_dataloader,epoch)
-
+        
         
         
 def evaluate(args,mode,eval_dataloader,epoch):
@@ -524,14 +530,11 @@ def evaluate(args,mode,eval_dataloader,epoch):
     model.eval()
     full_pred_y=torch.Tensor().to(device)
     full_pred_next_y = torch.Tensor().to(device)
-    
     full_true_y=torch.Tensor().to(device)
     full_true_next_y=torch.Tensor().to(device)
     
     pred_latent_y = torch.Tensor().to(device)
     pred_latent_next_y = torch.Tensor().to(device)
-    
-    full_data = torch.Tensor().to(device)
     best_auroc=0
     start_time= time.time()
     eval_loss_ = 0
@@ -550,17 +553,17 @@ def evaluate(args,mode,eval_dataloader,epoch):
             X = torchcde.CubicSpline(batch_coeffs)
             times = torch.arange(X.interval[-1].item()+1).to(batch_coeffs.device)
             present = X.evaluate(times)
-            # import pdb ; pdb.set_trace()
+            
         
         fore_loss = forecast_loss(forecast_y.cpu(),next_forecast) #256,20,55
         
         
-        present_score  =  pred_y
+        present_score  = (present.cuda() - reconstruct).mean(dim=[1,2]) + pred_y
         precursor_score =  pred_next_y
         
         binary_prediction = (present_score>0).to(batch_y.dtype)
         next_binary_prediction = (precursor_score>0).to(batch_y.dtype)
-        # import pdb ; pdb.set_trace()
+        
         
         
         batch_y = (batch_y.sum(dim=1)>0).to(batch_y.dtype) # 481/614
@@ -569,8 +572,6 @@ def evaluate(args,mode,eval_dataloader,epoch):
         loss = torch.nn.functional.binary_cross_entropy_with_logits(binary_prediction.cuda(), batch_y)
         next_loss = torch.nn.functional.binary_cross_entropy_with_logits(next_binary_prediction.cuda(), next_y)
         
-        
-        full_data = torch.cat([full_data,present.cuda()])
         full_pred_y=torch.cat([full_pred_y,binary_prediction])
         full_pred_next_y=torch.cat([full_pred_next_y,next_binary_prediction])
         
@@ -595,48 +596,26 @@ def evaluate(args,mode,eval_dataloader,epoch):
     next_y = full_true_next_y.squeeze(-1).detach().cpu().numpy()
    
     
-    if (full_true_y.sum() ==0) or (full_true_y.sum() == full_true_y.shape[0]): 
-        auroc = 0.5
-        auroc_next = 0.5
-        
-    else:
-        fpr,tpr,thresholds = metrics.roc_curve(y,preds,pos_label=1)
-        next_fpr,next_tpr,next_thresholds = metrics.roc_curve(next_y,next_preds,pos_label=1)
-        
-        auroc = metrics.auc(fpr,tpr)
-        auroc_next = metrics.auc(next_fpr,next_tpr)
-        
     
+    fpr,tpr,thresholds = metrics.roc_curve(y,preds,pos_label=1)
+    next_fpr,next_tpr,next_thresholds = metrics.roc_curve(next_y,next_preds,pos_label=1)
     Full_precision, Full_recall, Full_f_score, _     = precision_recall_fscore_support(full_true_y.cpu(), full_pred_y.cpu(),average='weighted')
     Next_precision, Next_recall, Next_f_score, _     = precision_recall_fscore_support(full_true_next_y.cpu(), full_pred_next_y.cpu(),average='weighted')
     
-            
     eval_loss = eval_loss_ / len(eval_dataloader)
     eval_mse_loss = eval_mse_loss_ / len(eval_dataloader)
-    
     if mode =='val':
-        print('Epoch: {}   Validation loss: {:.4f} , Validation Pr :      {:.4f}       Validation Re :      {:.4f}  Validation F1: {:.4f}  Validation AUROC :  {:.4f}      Time :{:.4f}'.format(epoch, eval_loss.item(),Full_precision,Full_recall,Full_f_score,auroc,(time.time()-start_time)))
-        print('[Precursor]                           Validation Next Pr : {:.4f}       Validation Next Re : {:.4f}  Val Next F1:   {:.4f}  Val Next AUROC :    {:.4f}'.format(Next_precision,Next_recall,Next_f_score,auroc_next))
+        print('Epoch: {}   Validation loss: {:.4f} , Validation Pr :      {:.4f}       Validation Re :      {:.4f}  Validation F1: {:.4f} Time :{:.4f}'.format(epoch, eval_loss.item(),Full_precision,Full_recall,Full_f_score,(time.time()-start_time)))
+        print('[Precursor]                           Validation Next Pr : {:.4f}       Validation Next Re : {:.4f}  Val Next F1:   {:.4f} '.format(Next_precision,Next_recall,Next_f_score))
         print('[Forecasting]                         Validation MSE :     {:.4f} \n'.format(eval_mse_loss))
     else:
-        print('Epoch: {}   Test loss:       {:.4f} , Test Pr :      {:.4f}       Test Re :      {:.4f}    Test F1:       {:.4f}  Test AUROC :        {:.4f}      Time :{:.4f}'.format(epoch, eval_loss.item(),Full_precision,Full_recall,Full_f_score,auroc,(time.time()-start_time)))
-        print('[Precursor]                           Test Next Pr : {:.4f}       Test Next Re : {:.4f}    Test Next F1:  {:.4f}  Test Next AUROC :   {:.4f}'.format(Next_precision,Next_recall,Next_f_score,auroc_next))
+        print('Epoch: {}   Test loss:       {:.4f} , Test Pr :      {:.4f}       Test Re :      {:.4f}    Test F1:       {:.4f}  Time :{:.4f}'.format(epoch, eval_loss.item(),Full_precision,Full_recall,Full_f_score,(time.time()-start_time)))
+        print('[Precursor]                           Test Next Pr : {:.4f}       Test Next Re : {:.4f}    Test Next F1:  {:.4f}  '.format(Next_precision,Next_recall,Next_f_score))
         print('[Forecasting]                         Test MSE :     {:.4f} \n'.format(eval_mse_loss))
         
         
         print("---------------------------------------------------------------------------------")
         
-
-
-        # if Next_f_score > 0.89:
-        #     import pdb;pdb.set_trace()
-        #     torch.save(batch_coeffs,'/home/bigdyl/continuous-time-flow-process/Visualization_source/SMD/SMD_data.pt')
-        #     torch.save(full_pred_next_y,'/home/bigdyl/continuous-time-flow-process/Visualization_source/SMD/SMD_prediction.pt')
-        #     torch.save(full_true_next_y,'/home/bigdyl/continuous-time-flow-process/Visualization_source/SMD/SMD_true.pt')
-        #     torch.save(full_true_y,'/home/bigdyl/continuous-time-flow-process/Visualization_source/SMD/SMD_present_true.pt')
-        #     torch.save(full_pred_y,'/home/bigdyl/continuous-time-flow-process/Visualization_source/SMD/SMD_present_prediction.pt')
-        # auroc = sklearn.metrics.roc_auc_score(full_pred_y.detach().cpu().numpy(), full_true_y.detach().cpu().numpy())
-                   
 
 
         
@@ -657,8 +636,7 @@ if __name__ == "__main__":
     
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
-    # cvt = lambda x: x.type(torch.float32).to(device, non_blocking=True)
-    # import pdb ; pdb.set_trace()
+    
     input_size, train_dataloader,val_dataloader,test_dataloader = get_dataset(args)
     
     
@@ -675,21 +653,4 @@ if __name__ == "__main__":
     
     train(args,optimizer,forecast_loss,train_dataloader,val_dataloader,test_dataloader)
     
-       
-        
-            
-        
-        
-        
-        
-
-    #  python train_anomaly.py --dataset 'MSL' --data_path 'dataset/MSL' --step_size 60 --dims "12,32,32,12" --batch_size 100  --win_size 60  --num_epochs 100  --lr 1e-3 --nonlinearity 'tanh' --solver 'dopri5' --weight_decay 1e-5 --activation identity --input_size 34 --seed 11  --effective_shape 34 --det_win 10 
-    # python train_anomaly.py --dataset 'MSL' --data_path 'dataset/MSL' --step_size 500 --dims "12,32,32,12" --batch_size 200  --win_size 500  --num_epochs 100  --lr 1e-3 --nonlinearity 'tanh' --solver 'dopri5' --weight_decay 1e-5 --activation identity --input_size 34 --seed 11  --effective_shape 34 --det_win 1 
-    # python train_anomaly_new.py --dataset 'MSL' --data_path 'dataset/MSL' --dims "12,32,32,12" --batch_size 200  --win_size 60  --num_epochs 100  --step_size 20  --lr 1e-3 --nonlinearity 'tanh' --solver 'dopri5' --weight_decay 1e-5 --activation identity --input_size 34 --seed 11  --effective_shape 34 --det_win 60
-    # CUDA_VISIBLE_DEVICES=1 python train_anomaly_exp.py --dataset 'MSL' --data_path 'dataset/MSL' --model ncde 
-    # CUDA_VISIBLE_DEVICES=1 python train_anomaly_exp.py --dataset 'MSL' --data_path 'dataset/MSL' --model ncde --win_size 60 --forecast_window 20 --step_size 60 
-    # CUDA_VISIBLE_DEVICES=1 python train_anomaly_exp.py --dataset 'SMD' --data_path 'dataset/SMD' --model ncde --win_size 60 --forecast_window 30 --step_size 60 
-    # CUDA_VISIBLE_DEVICES=1 python train_anomaly_exp.py --dataset 'SMAP' --data_path 'dataset/SMAP' --model ncde --win_size 100 --forecast_window 20 --step_size 100 --model ncde
-    # CUDA_VISIBLE_DEVICES=0 python train_anomaly_exp.py --dataset 'PSM' --data_path 'dataset/PSM' --model ncde --win_size 60 --forecast_window 30 --step_size 60 --model ncde
-    # CUDA_VISIBLE_DEVICES=0 python train_anomaly_exp_self_check.py --dataset SWAT --data_path dataset/SWAT --win_size 30 --step_size 30 --forecast_window 10 --h_channels 49 --hh_channels_f 128 --hh_channels_g  64 --hh_channels_c 64 --seed 112 --lr 1e-2
-    # CUDA_VISIBLE_DEVICES=0python train_anomaly_exp_self_check2.py --dataset SWAT --data_path dataset/SWAT --win_size 30 --forecast_window 2 --step_size 1 --lr 1e-2 --h_channels 49 --hh_channels_f 128 --hh_channels_g 64 --hh_channels_c 64 --seed 112 --interpolation natural_cubic --batch_size 32
+    
